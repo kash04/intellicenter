@@ -927,7 +927,12 @@ async def test_setup_pool_entities_removes_registry_entity(
     assert state["removed_listener"] is not None
 
     # Simulate HA having registered one of the CHEM1 entities.
-    target = next(e for e in added if e._pool_object.objnam == "CHEM1")
+    target = next(
+        e
+        for e in added
+        if getattr(e, "_pool_object", None) is not None
+        and e._pool_object.objnam == "CHEM1"
+    )
     registry = er.async_get(hass)
     reg_entry = registry.async_get_or_create(
         "sensor", "intellicenter", target.unique_id
@@ -960,7 +965,11 @@ async def test_setup_pool_entities_re_adds_entities_after_removal(
     added: list[Any] = []
     await async_setup_entry(hass, entry, added.extend)
     assert pool_model["CHEM1"] is not None
-    assert any(e._pool_object.objnam == "CHEM1" for e in added)
+    assert any(
+        getattr(e, "_pool_object", None) is not None
+        and e._pool_object.objnam == "CHEM1"
+        for e in added
+    )
 
     # Mirror production: the library prunes the object from the model BEFORE
     # dispatching the removal, and the object re-enters the model before the

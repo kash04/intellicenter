@@ -67,6 +67,7 @@ CONTROLLER_METHODS = (
     "refresh_pump_circuit_speed",
     "request_changes",
     "run_light_group_sync",
+    "send_cmd",
     "set_alkalinity",
     "set_calcium_hardness",
     "set_chlorinator_output",

@@ -37,6 +37,31 @@ SINGLE_ATTR = "SINGLE"  # not yet in pyintellicenter
 CHLORINATOR_SUBTYPE = "ICHLOR"
 CHEM_CONTROLLER_SUBTYPE = "ICHEM"
 
+# IntelliChlor problem flags. pyintellicenter 0.3.2 does not export these names.
+# The panel reports them as ON/OFF on a CHEM object whose subtype is ICHLOR.
+# No Flow is not one of these keys; it arrives as a STATUS alert object.
+COMERR_ATTR = "COMERR"  # communication lost
+SALTLO_ATTR = "SALTLO"  # low salt
+VERYLO_ATTR = "VERYLO"  # very low salt
+CUTOFF_ATTR = "CUTOFF"  # cold water cutoff
+CLEAN_ATTR = "CLEAN"  # clean / inspect cell
+CHLORINATOR_PROBLEM_ATTRS: tuple[str, ...] = (
+    COMERR_ATTR,
+    SALTLO_ATTR,
+    VERYLO_ATTR,
+    CUTOFF_ATTR,
+    CLEAN_ATTR,
+)
+
+# Controller alert rows (OBJTYP=STATUS). pyintellicenter 0.3.2 has no STATUS type.
+STATUS_OBJECT_TYPE = "STATUS"
+COUNT_ATTR = "COUNT"  # occurrences
+PARTY_ATTR = "PARTY"  # epoch seconds of the last occurrence
+
+# How often to re-read active controller alerts. Objects already in the model
+# are push-subscribed; this interval discovers alerts that appear or clear later.
+ALERT_REFRESH_INTERVAL = 30
+
 # Configuration option keys
 CONF_KEEPALIVE_INTERVAL = "keepalive_interval"
 CONF_RECONNECT_DELAY = "reconnect_delay"

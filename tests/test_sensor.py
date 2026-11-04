@@ -1017,7 +1017,9 @@ async def test_setup_creates_body_last_temp_sensors(
 
     await async_setup_entry(hass, mock_entry, capture_entities)
 
-    names = [e.name for e in entities_added]
+    names = [
+        e.name for e in entities_added if getattr(e, "_pool_object", None) is not None
+    ]
     assert "Pool Last Temp" in names
     assert "Spa Last Temp" in names
 
@@ -1025,7 +1027,10 @@ async def test_setup_creates_body_last_temp_sensors(
     # default and with a distinct unique_id (no collision with each other or
     # the body switch/heater that share the same BODY object).
     last_temp = [
-        e for e in entities_added if e.name in ("Pool Last Temp", "Spa Last Temp")
+        e
+        for e in entities_added
+        if getattr(e, "_pool_object", None) is not None
+        and e.name in ("Pool Last Temp", "Spa Last Temp")
     ]
     assert len(last_temp) == 2
     assert len({e.unique_id for e in last_temp}) == 2

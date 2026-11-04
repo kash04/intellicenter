@@ -134,11 +134,11 @@ After setup, configure connection settings:
 | **Light Shows** | Light | Coordinated multi-light effects and the Color Sync action over TCP or WebSocket |
 | **Circuits** | Switch | All "Featured" circuits (cleaner, blower, etc.) |
 | **Pumps** | Binary Sensor, Sensors | Running status, power (W), speed (RPM), flow (GPM) |
-| **Chemistry** | Sensors, Number | pH, ORP, tank levels, setpoints (IntelliChem) |
+| **Chemistry** | Sensors, Number, Binary Sensor | pH, ORP, tank levels, setpoints (IntelliChem); salt level and output (IntelliChlor); chlorinator problem indicators |
 | **Heat Pumps** | Climate | UltraTemp heating/cooling with presets |
 | **Heaters** | Binary Sensor, Water Heater | Running status; HCOMBO (UltraTemp ETi Hybrid) Gas/Heat Pump/Hybrid/Dual modes |
 | **Schedules** | Binary Sensor | Active status (disabled by default) |
-| **System** | Switch, Binary Sensor, Sensors | Vacation mode, freeze protection, temperatures, System Mode (`auto`/`service`/`timeout`), "Not in Auto" problem indicator, firmware advisories (a Repairs warning is raised for firmware with documented issues, e.g. the pulled 2.x line) |
+| **System** | Switch, Binary Sensor, Sensors | Vacation mode, freeze protection, temperatures, System Mode (`auto`/`service`/`timeout`), "Not in Auto" problem indicator, active controller alerts, firmware advisories (a Repairs warning is raised for firmware with documented issues, e.g. the pulled 2.x line) |
 | **Covers** | Cover | Pool cover position (`POSIT`) and open/close; availability follows the panel connection (STATUS never hides the entity); older firmware without position reporting shows unknown |
 
 ### Advanced System Settings
@@ -216,6 +216,28 @@ Calibration number support is staged behind device-verified limits; no productio
 firmware is enabled yet. Existing raw probe sensors and calibration attributes
 remain available. See [sensor calibration](docs/SENSOR_CALIBRATION.md) for units,
 readback handling and the remaining device evidence required for issue #185.
+
+### Controller Alerts
+
+Diagnostic, read-only entities on the IntelliCenter device:
+
+- **Active alerts** (`sensor`): how many controller alerts are active. The
+  `alerts` attribute is the list of messages, and `alert_details` includes the
+  source object, parent, count, time and mode when the panel sent them.
+- **Any alert active** (`binary_sensor`, device class `problem`): on while that
+  count is greater than zero.
+- **IntelliChlor problem flags** (`binary_sensor`, device class `problem`), one
+  per flag the chlorinator actually reports as on/off: Communication Lost
+  (`COMERR`), Low Salt (`SALTLO`), Very Low Salt (`VERYLO`), Cold Water Cutoff
+  (`CUTOFF`) and Clean Cell (`CLEAN`), plus a **Chlorinator Alert** summary.
+  Salt level and chlorinator output are unchanged. No Flow is not a chlorinator
+  flag; when the panel raises it, it is one of the controller alerts above.
+
+Alerts already known to the integration update through the normal push stream.
+About every 30 seconds the integration also re-reads the panel's active-alert
+query so alerts that appear or clear later are picked up. Nothing is written
+or cleared. If the panel rejects that query, alerts found in the initial object
+snapshot are still shown.
 
 ### Connection Status
 

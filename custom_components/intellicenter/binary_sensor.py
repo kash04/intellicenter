@@ -6,6 +6,8 @@ This module provides binary sensor entities for:
 - Schedule status
 - Pump status
 - IntelliChem alarm indicators (diagnostic)
+- IntelliChlor problem flags (diagnostic)
+- Any active controller alert (diagnostic)
 """
 
 from __future__ import annotations
@@ -63,7 +65,20 @@ from . import (
     async_setup_pool_entities,
     protocol_on_off,
 )
-from .const import CHEM_CONTROLLER_SUBTYPE, DNTSTP_ATTR, DOMAIN, SINGLE_ATTR
+from .alerts import active_alerts, alert_state_attributes
+from .const import (
+    CHEM_CONTROLLER_SUBTYPE,
+    CHLORINATOR_PROBLEM_ATTRS,
+    CHLORINATOR_SUBTYPE,
+    CLEAN_ATTR,
+    COMERR_ATTR,
+    CUTOFF_ATTR,
+    DNTSTP_ATTR,
+    DOMAIN,
+    SALTLO_ATTR,
+    SINGLE_ATTR,
+    VERYLO_ATTR,
+)
 from .coordinator import IntelliCenterCoordinator
 from .sensor import normalize_system_mode
 
@@ -73,6 +88,17 @@ _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 _CHEM_ALERT_ENTITY_KEY = "CHEM_ALERT"
+_CHLOR_ALERT_ENTITY_KEY = "CHLOR_ALERT"
+
+# (attribute, label, icon). Only flags the panel reports as ON/OFF on an
+# IntelliChlor are created. No Flow is a STATUS alert, not a flag.
+_CHLORINATOR_PROBLEMS: tuple[tuple[str, str, str], ...] = (
+    (COMERR_ATTR, "Communication Lost", "mdi:lan-disconnect"),
+    (SALTLO_ATTR, "Low Salt", "mdi:alert-minus-outline"),
+    (VERYLO_ATTR, "Very Low Salt", "mdi:alert-octagon-outline"),
+    (CUTOFF_ATTR, "Cold Water Cutoff", "mdi:thermometer-low"),
+    (CLEAN_ATTR, "Clean Cell", "mdi:filter-remove-outline"),
+)
 
 
 def _build_entities(
@@ -80,6 +106,7 @@ def _build_entities(
 ) -> list[
     PoolBinarySensor
     | ChemAlertBinarySensor
+    | ChlorinatorAlertBinarySensor
     | FirmwareUpdateBinarySensor
     | HeaterBinarySensor
     | PumpBinarySensor
@@ -90,6 +117,7 @@ def _build_entities(
     sensors: list[
         PoolBinarySensor
         | ChemAlertBinarySensor
+        | ChlorinatorAlertBinarySensor
         | FirmwareUpdateBinarySensor
         | HeaterBinarySensor
         | PumpBinarySensor
@@ -175,6 +203,24 @@ def _build_entities(
                         entity_category=EntityCategory.DIAGNOSTIC,
                     )
                 )
+        elif obj.objtype == CHEM_TYPE and obj.subtype == CHLORINATOR_SUBTYPE:
+            reported = _reported_chlorinator_problems(obj)
+            if reported:
+                sensors.append(ChlorinatorAlertBinarySensor(coordinator, obj))
+            for attribute, label, icon in _CHLORINATOR_PROBLEMS:
+                if attribute not in reported:
+                    continue
+                sensors.append(
+                    PoolBinarySensor(
+                        coordinator,
+                        obj,
+                        attribute_key=attribute,
+                        name=f"+ ({label})",
+                        icon=icon,
+                        device_class=BinarySensorDeviceClass.PROBLEM,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    )
+                )
         elif obj.objtype == SYSTEM_TYPE:
             sensors.append(FirmwareUpdateBinarySensor(coordinator, obj))
             if SERVICE_ATTR in obj.attribute_keys:
@@ -191,8 +237,22 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Load pool binary sensors based on a config entry."""
-    async_add_entities([ConnectionBinarySensor(entry.runtime_data)])
+    async_add_entities(
+        [
+            ConnectionBinarySensor(entry.runtime_data),
+            AnyAlertBinarySensor(entry.runtime_data),
+        ]
+    )
     async_setup_pool_entities(entry, async_add_entities, _build_entities)
+
+
+def _reported_chlorinator_problems(obj: PoolObject) -> frozenset[str]:
+    """Return chlorinator flag keys the panel actually reports as ON or OFF."""
+    return frozenset(
+        attribute
+        for attribute in CHLORINATOR_PROBLEM_ATTRS
+        if protocol_on_off(obj[attribute]) is not None
+    )
 
 
 # -------------------------------------------------------------------------------------
@@ -237,6 +297,55 @@ class ConnectionBinarySensor(
 
     async def async_update(self) -> None:
         """Keep manual refresh local; this push observer makes no requests."""
+
+
+class AnyAlertBinarySensor(
+    CoordinatorEntity[IntelliCenterCoordinator], BinarySensorEntity
+):
+    """Problem sensor that is on while any controller alert is active."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:alert-outline"
+    _attr_should_poll = False
+    _attr_translation_key = "any_alert"
+
+    def __init__(self, coordinator: IntelliCenterCoordinator) -> None:
+        """Subscribe to the coordinator that owns the alert model."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_any_alert"
+
+    @property
+    def available(self) -> bool:
+        """Follow the panel connection; a stale alert list is not current."""
+        return bool(self.coordinator.connected)
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether the model currently holds any STATUS alert."""
+        return bool(active_alerts(self.coordinator.model))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the active alert messages and their source details."""
+        return alert_state_attributes(active_alerts(self.coordinator.model))
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Describe the shared IntelliCenter device."""
+        system_info = self.coordinator.system_info
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.config_entry.entry_id)},
+            manufacturer="Pentair",
+            model="IntelliCenter",
+            name=system_info.prop_name if system_info else "IntelliCenter",
+            sw_version=system_info.sw_version if system_info else None,
+        )
+
+    async def async_update(self) -> None:
+        """Re-read active alerts without writing anything to the controller."""
+        await self.coordinator.async_refresh_status_alerts()
 
 
 class PoolBinarySensor(PoolEntity, BinarySensorEntity):
@@ -391,6 +500,63 @@ class ChemAlertBinarySensor(PoolEntity, BinarySensorEntity):
     def isUpdated(self, updates: dict[str, dict[str, Any]]) -> bool:
         """Return whether any contributing alarm attribute changed."""
         return self._check_attributes_updated(updates, *self._alert_attributes)
+
+
+class ChlorinatorAlertBinarySensor(PoolEntity, BinarySensorEntity):
+    """Aggregate IntelliChlor problem state.
+
+    On when any reported chlorinator flag is ON. Salt level and chlorinator
+    output are separate entities and are not inputs here.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:alert-outline"
+
+    def __init__(
+        self,
+        coordinator: IntelliCenterCoordinator,
+        pool_object: PoolObject,
+    ) -> None:
+        """Initialize the aggregate chlorinator alert sensor."""
+        super().__init__(
+            coordinator,
+            pool_object,
+            attribute_key=_CHLOR_ALERT_ENTITY_KEY,
+            name="+ Chlorinator Alert",
+        )
+
+    @property
+    def _flag_states(self) -> tuple[tuple[str, bool], ...]:
+        """Return the flags the panel is actually reporting right now."""
+        states: list[tuple[str, bool]] = []
+        for attribute, label, _icon in _CHLORINATOR_PROBLEMS:
+            state = protocol_on_off(self._pool_object[attribute])
+            if state is not None:
+                states.append((label, state))
+        return tuple(states)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether any reported chlorinator flag is on."""
+        states = self._flag_states
+        if not states:
+            return None
+        return any(state for _label, state in states)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the names of the flags that are currently on."""
+        attributes = super().extra_state_attributes
+        if self.is_on is not None:
+            attributes["active_alerts"] = [
+                label for label, state in self._flag_states if state
+            ]
+        return attributes
+
+    def isUpdated(self, updates: dict[str, dict[str, Any]]) -> bool:
+        """Return whether any chlorinator problem flag changed."""
+        return self._check_attributes_updated(updates, *CHLORINATOR_PROBLEM_ATTRS)
 
 
 class FirmwareUpdateBinarySensor(PoolEntity, BinarySensorEntity):

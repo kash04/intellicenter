@@ -103,6 +103,9 @@ class FakeConnection:
         return lambda: None
 
     async def send_request(self, command: str, **kwargs):
+        if command == "GetQuery":
+            assert kwargs.get("queryName") == "GetActiveStatusMessages"
+            return {"response": "200", "answer": []}
         if command == "RequestParamList":
             return {"objectList": []}
         assert command == "GetParamList"

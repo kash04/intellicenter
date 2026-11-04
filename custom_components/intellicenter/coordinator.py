@@ -8,7 +8,9 @@ notifications from the controller.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
+import contextlib
 from dataclasses import dataclass
 import logging
 import re
@@ -94,7 +96,9 @@ from pyintellicenter import (
     VER_ATTR,
     VOL_ATTR,
     ICBaseController,
+    ICCommandError,
     ICConnectionHandler,
+    ICError,
     ICModelController,
     ICSystemInfo,
     ObjectEntry,
@@ -107,8 +111,16 @@ from .advanced_settings import (
     MANOVR_ATTR,
     manual_priority_supported,
 )
+from .alerts import (
+    ACTIVE_ALERTS_QUERY,
+    STATUS_TRACKED_ATTRIBUTES,
+    apply_status_snapshot,
+    parse_active_status_response,
+)
 from .const import (
+    ALERT_REFRESH_INTERVAL,
     CALIB_ATTR,
+    CHLORINATOR_PROBLEM_ATTRS,
     DEFAULT_TRANSPORT,
     DNTSTP_ATTR,
     DOMAIN,
@@ -119,6 +131,7 @@ from .const import (
     PRIMTIM_ATTR,
     PROBE_ATTR,
     SINGLE_ATTR,
+    STATUS_OBJECT_TYPE,
     TransportType,
 )
 from .restrictions import RestrictionIndex
@@ -217,10 +230,15 @@ DEFAULT_ATTRIBUTES_MAP: dict[str, set[str]] = {
         PHLO_ATTR,
         ORPHI_ATTR,
         ORPLO_ATTR,
-        # IntelliChlor sensors
+        # IntelliChlor sensors. Salt and the output settings stay as they are;
+        # the problem flags are read-only diagnostic state on the same object.
         SALT_ATTR,
         TIMOUT_ATTR,
+        *CHLORINATOR_PROBLEM_ATTRS,
     },
+    # Controller alerts. Without this entry PoolModel drops OBJTYP=STATUS and
+    # the library never subscribes to alert rows it already knows about.
+    STATUS_OBJECT_TYPE: set(STATUS_TRACKED_ATTRIBUTES),
     # External instruments (pool covers). Without this entry PoolModel drops the
     # objects entirely and the cover platform never sees them (the model only
     # admits objtypes present in this map).
@@ -288,12 +306,13 @@ DEFAULT_ATTRIBUTES_MAP: dict[str, set[str]] = {
 
 
 # MANOVR's object type is not established by the static save builder. Request
-# only this key on tracked equipment/clock objects (not relationship rows) before
-# exposing a control. Do not alias it to SYSTEM.MANHT.
+# only this key on tracked equipment/clock objects (not relationship rows or
+# alert rows) before exposing a control. A recognized ON/OFF on an alert row
+# would become a writable manual-priority switch. Do not alias it to SYSTEM.MANHT.
 for _setting in CONFIGURATION_SETTINGS:
     DEFAULT_ATTRIBUTES_MAP.setdefault(_setting.object_type, set()).add(_setting.key)
 for _objtype, _attributes in DEFAULT_ATTRIBUTES_MAP.items():
-    if _objtype != CIRCGRP_TYPE:
+    if _objtype not in (CIRCGRP_TYPE, STATUS_OBJECT_TYPE):
         _attributes.add(MANOVR_ATTR)
 
 
@@ -407,6 +426,9 @@ class IntelliCenterCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]])
         # and retain initially empty keys until a builder can use their value.
         self._pending_redispatch: dict[str, set[str]] = {}
         self._pending_truthy_redispatch: dict[str, set[str]] = {}
+        self._alert_refresh_task: asyncio.Task[None] | None = None
+        self._alert_refresh_lock = asyncio.Lock()
+        self._alert_query_unavailable = False
 
     @callback
     def async_add_listener(
@@ -583,6 +605,7 @@ class IntelliCenterCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]])
         # Initial objects can also defer builders on missing or falsy attributes.
         for obj in self._model:
             self._seed_redispatch_bookkeeping(obj, only_if_deferred=True)
+        self._ensure_alert_refresh()
 
     async def async_stop(self) -> None:
         """Stop the connection to the IntelliCenter.
@@ -592,6 +615,7 @@ class IntelliCenterCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]])
         - over a connection that is still closing.
         """
         self.async_invalidate_calibration()
+        await self._async_stop_alert_refresh()
         # Cancel stop listener
         if self._stop_listener:
             self._stop_listener()
@@ -604,6 +628,82 @@ class IntelliCenterCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]])
         # (its ``_stopped`` guard), even before the teardown task closes the
         # socket.
         await self._handler.astop()
+
+    def _ensure_alert_refresh(self) -> None:
+        """Start the read-only active-alert reconcile loop once."""
+        task = self._alert_refresh_task
+        if task is not None and not task.done():
+            return
+        # Background task: async_block_till_done must not wait out the sleep.
+        self._alert_refresh_task = self.hass.async_create_background_task(
+            self._async_alert_refresh_loop(),
+            name=f"{DOMAIN}_alert_refresh",
+            eager_start=True,
+        )
+
+    async def _async_stop_alert_refresh(self) -> None:
+        """Cancel the alert reconcile loop and wait for it to finish."""
+        task = self._alert_refresh_task
+        self._alert_refresh_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _async_alert_refresh_loop(self) -> None:
+        """Reconcile controller alerts until the coordinator stops."""
+        while True:
+            try:
+                await self.async_refresh_status_alerts()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("Unexpected error refreshing controller alerts")
+            await asyncio.sleep(ALERT_REFRESH_INTERVAL)
+
+    async def async_refresh_status_alerts(self) -> None:
+        """Replace the model's STATUS objects with the controller's active set.
+
+        Read-only. A rejected or unusable response leaves the current alerts in
+        place so a firmware that does not implement the query, or a malformed
+        payload, cannot clear alerts discovered from the object snapshot.
+        """
+        if not self.connected:
+            return
+        async with self._alert_refresh_lock:
+            try:
+                response = await self._controller.send_cmd(
+                    "GetQuery",
+                    {"queryName": ACTIVE_ALERTS_QUERY, "arguments": ""},
+                )
+            except ICCommandError as err:
+                if not self._alert_query_unavailable:
+                    _LOGGER.warning(
+                        "Controller rejected the active-alert query; "
+                        "showing alerts from the object snapshot until it succeeds: %s",
+                        err,
+                    )
+                    self._alert_query_unavailable = True
+                return
+            except ICError as err:
+                _LOGGER.debug("Active alert query skipped: %s", err)
+                return
+
+            entries = parse_active_status_response(response)
+            if entries is None:
+                _LOGGER.debug("Active alert query returned an unusable payload")
+                return
+            self._alert_query_unavailable = False
+            updates = apply_status_snapshot(self._model, entries)
+            if not updates:
+                return
+            _LOGGER.debug(
+                "Controller alerts changed (%d update(s), %d active)",
+                len(updates),
+                len(self._model.get_by_type(STATUS_OBJECT_TYPE)),
+            )
+            self.async_set_updated_data(updates)
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         """Fetch data from the IntelliCenter.

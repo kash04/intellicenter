@@ -27,7 +27,9 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from pyintellicenter import (
     BODY_TYPE,
     CHEM_TYPE,
@@ -68,6 +70,7 @@ from . import (
     safe_int,
 )
 from .advanced_settings import CONFIGURATION_SETTINGS, ConfigurationSetting
+from .alerts import active_alerts, alert_state_attributes
 from .const import (
     CALIB_ATTR,
     CHEM_CONTROLLER_SUBTYPE,
@@ -75,6 +78,7 @@ from .const import (
     CONCENTRATION_PPM,
     CONST_GPM,
     CONST_RPM,
+    DOMAIN,
     PORT_ATTR,
     PROBE_ATTR,
 )
@@ -351,7 +355,60 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Load pool sensors based on a config entry."""
+    async_add_entities([ActiveAlertsSensor(entry.runtime_data)])
     async_setup_pool_entities(entry, async_add_entities, _build_entities)
+
+
+class ActiveAlertsSensor(CoordinatorEntity[IntelliCenterCoordinator], SensorEntity):
+    """Diagnostic count of active controller alerts.
+
+    The state is how many ``STATUS`` objects are in the model. ``alerts`` lists
+    the messages and ``alert_details`` carries the source object, parent, count,
+    time and mode when the panel provided them.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "active_alerts"
+
+    def __init__(self, coordinator: IntelliCenterCoordinator) -> None:
+        """Subscribe to the coordinator that owns the alert model."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_active_alerts"
+
+    @property
+    def available(self) -> bool:
+        """Follow the panel connection; a stale count is not current."""
+        return bool(self.coordinator.connected)
+
+    @property
+    def native_value(self) -> int:
+        """Return how many controller alerts are currently in the model."""
+        return len(active_alerts(self.coordinator.model))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the active alert messages and their source details."""
+        return alert_state_attributes(active_alerts(self.coordinator.model))
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Describe the shared IntelliCenter device."""
+        system_info = self.coordinator.system_info
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.config_entry.entry_id)},
+            manufacturer="Pentair",
+            model="IntelliCenter",
+            name=system_info.prop_name if system_info else "IntelliCenter",
+            sw_version=system_info.sw_version if system_info else None,
+        )
+
+    async def async_update(self) -> None:
+        """Re-read active alerts without writing anything to the controller."""
+        await self.coordinator.async_refresh_status_alerts()
 
 
 # -------------------------------------------------------------------------------------

@@ -55,6 +55,10 @@ from tests.conftest import ON_OFF_UNKNOWN_CASES
 
 pytestmark = pytest.mark.asyncio
 
+# Broadcast observers are not tied to one pool object: the connection sensor
+# plus the active-alert count and any-alert problem sensor.
+BROADCAST_OBSERVERS = 3
+
 
 @pytest.fixture
 def connection_transport() -> Generator[tuple[AsyncMock, AsyncMock]]:
@@ -139,7 +143,7 @@ async def test_connection_registry_empty_model_two_entries_and_retirement(
             "3.008",
         )
         coordinator = entry.runtime_data
-        assert len(coordinator._broadcast_update_listeners) == 1
+        assert len(coordinator._broadcast_update_listeners) == BROADCAST_OBSERVERS
         # Repeated equipment discovery/removal must not own this observer.
         for _ in range(2):
             coordinator.model.add_object(
@@ -332,7 +336,7 @@ async def test_connection_registry_choices_reload_and_failed_unload(
         hass.config_entries, "async_unload_platforms", return_value=False
     ):
         assert not await async_unload_entry(hass, entry)
-    assert len(coordinator._broadcast_update_listeners) == 1
+    assert len(coordinator._broadcast_update_listeners) == BROADCAST_OBSERVERS
     assert coordinator._handler._stopped is False
     coordinator._handler._is_connected = False
     coordinator.controller._connection = None
@@ -342,7 +346,8 @@ async def test_connection_registry_choices_reload_and_failed_unload(
         entity_id, name="My panel link", disabled_by=er.RegistryEntryDisabler.USER
     )
     await hass.async_block_till_done()
-    assert not coordinator._broadcast_update_listeners
+    # Disabling the connection sensor removes only that observer.
+    assert len(coordinator._broadcast_update_listeners) == BROADCAST_OBSERVERS - 1
     # Reload uses a new coordinator without changing the identity or choices.
     hass.config_entries.async_update_entry(
         entry, data={CONF_HOST: "192.0.2.99", "transport": "websocket"}
@@ -354,11 +359,11 @@ async def test_connection_registry_choices_reload_and_failed_unload(
     assert _connection_id(hass, entry) == entity_id
     assert registry.async_get(entity_id).name == "My panel link"
     assert registry.async_get(entity_id).disabled_by is er.RegistryEntryDisabler.USER
-    assert not new_coordinator._broadcast_update_listeners
+    assert len(new_coordinator._broadcast_update_listeners) == BROADCAST_OBSERVERS - 1
     registry.async_update_entity(entity_id, disabled_by=None)
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(entry.runtime_data._broadcast_update_listeners) == 1
+    assert len(entry.runtime_data._broadcast_update_listeners) == BROADCAST_OBSERVERS
     assert hass.states.get(entity_id).attributes["friendly_name"] == "My panel link"
     coordinator.async_set_connection_state(False)
     assert hass.states.get(entity_id).state == "on"

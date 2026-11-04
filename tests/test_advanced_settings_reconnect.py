@@ -61,6 +61,9 @@ def _transport(*, advanced):
         connection.connected = False
 
     async def send_request(command, **kwargs):
+        if command == "GetQuery":
+            assert kwargs.get("queryName") == "GetActiveStatusMessages"
+            return {"response": "200", "answer": []}
         if command == "GetParamList":
             if kwargs["condition"] == "OBJTYP=SYSTEM":
                 return {

@@ -29,6 +29,7 @@ from custom_components.intellicenter.advanced_settings import (
     CONFIGURATION_SETTINGS,
     MANOVR_ATTR,
 )
+from custom_components.intellicenter.const import STATUS_OBJECT_TYPE
 from custom_components.intellicenter.coordinator import (
     DEFAULT_ATTRIBUTES_MAP,
     IntelliCenterCoordinator,
@@ -72,9 +73,10 @@ def test_tracking_does_not_change_heater_activity_contract() -> None:
     assert all(
         MANOVR_ATTR in attrs
         for objtype, attrs in DEFAULT_ATTRIBUTES_MAP.items()
-        if objtype != CIRCGRP_TYPE
+        if objtype not in (CIRCGRP_TYPE, STATUS_OBJECT_TYPE)
     )
     assert MANOVR_ATTR not in DEFAULT_ATTRIBUTES_MAP[CIRCGRP_TYPE]
+    assert MANOVR_ATTR not in DEFAULT_ATTRIBUTES_MAP[STATUS_OBJECT_TYPE]
 
 
 def test_manual_heat_identity_and_priority_owner_are_independent(

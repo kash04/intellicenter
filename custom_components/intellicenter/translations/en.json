@@ -3,9 +3,15 @@
     "binary_sensor": {
       "connection": {
         "name": "Connection"
+      },
+      "any_alert": {
+        "name": "Any alert active"
       }
     },
     "sensor": {
+      "active_alerts": {
+        "name": "Active alerts"
+      },
       "system_mode": {
         "state": {
           "auto": "Auto",

@@ -41,7 +41,13 @@ from . import (
     protocol_on_off,
 )
 from .advanced_settings import MANOVR_ATTR, manual_priority_supported
-from .const import CHLORINATOR_SUBTYPE, DNTSTP_ATTR, DOMAIN, MANHT_ATTR
+from .const import (
+    CHLORINATOR_SUBTYPE,
+    DNTSTP_ATTR,
+    DOMAIN,
+    MANHT_ATTR,
+    STATUS_OBJECT_TYPE,
+)
 from .coordinator import IntelliCenterCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,9 +62,10 @@ def _build_entities(
     """Build switch entities for the given candidate pool objects."""
     switches: list[SwitchEntity] = []
     for pool_obj in candidates:
-        if pool_obj.objtype != CIRCGRP_TYPE and manual_priority_supported(
-            pool_obj[MANOVR_ATTR]
-        ):
+        if pool_obj.objtype not in (
+            CIRCGRP_TYPE,
+            STATUS_OBJECT_TYPE,
+        ) and manual_priority_supported(pool_obj[MANOVR_ATTR]):
             switches.append(ManualPrioritySwitch(coordinator, pool_obj))
         if pool_obj.objtype == BODY_TYPE:
             switches.append(PoolBody(coordinator, pool_obj))

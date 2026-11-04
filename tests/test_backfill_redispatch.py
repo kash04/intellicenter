@@ -94,7 +94,8 @@ def _telemetry_keys(added: list[Any]) -> list[str]:
     return [
         entity._attribute_key
         for entity in added
-        if entity._pool_object.objnam == PUMP_OBJNAM
+        if getattr(entity, "_pool_object", None) is not None
+        and entity._pool_object.objnam == PUMP_OBJNAM
         and entity._attribute_key in {"PWR", "RPM", "GPM"}
     ]
 

@@ -580,7 +580,9 @@ async def test_sensor_platform_never_retires_on_empty_telemetry(
     pwr_sensor = next(
         e
         for e in added
-        if e._pool_object.objnam == "PUMP1" and e._attribute_key == "PWR"
+        if getattr(e, "_pool_object", None) is not None
+        and e._pool_object.objnam == "PUMP1"
+        and e._attribute_key == "PWR"
     )
     pwr_id = _register_entity(hass, pwr_sensor, "sensor")
 
