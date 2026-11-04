@@ -40,6 +40,7 @@ from pyintellicenter import (
     LOTMP_ATTR,
     ORPHI_ATTR,
     ORPLO_ATTR,
+    PARENT_ATTR,
     PHHI_ATTR,
     PHLO_ATTR,
     PUMP_STATUS_ON,
@@ -65,7 +66,7 @@ from . import (
     async_setup_pool_entities,
     protocol_on_off,
 )
-from .alerts import active_alerts, alert_state_attributes
+from .alerts import active_alerts, alert_state_attributes, alerts_for_parent
 from .const import (
     CHEM_CONTROLLER_SUBTYPE,
     CHLORINATOR_PROBLEM_ATTRS,
@@ -77,6 +78,7 @@ from .const import (
     DOMAIN,
     SALTLO_ATTR,
     SINGLE_ATTR,
+    STATUS_OBJECT_TYPE,
     VERYLO_ATTR,
 )
 from .coordinator import IntelliCenterCoordinator
@@ -505,13 +507,15 @@ class ChemAlertBinarySensor(PoolEntity, BinarySensorEntity):
 class ChlorinatorAlertBinarySensor(PoolEntity, BinarySensorEntity):
     """Aggregate IntelliChlor problem state.
 
-    On when any reported chlorinator flag is ON. Salt level and chlorinator
-    output are separate entities and are not inputs here.
+    On when any reported chlorinator flag is ON, or when a controller STATUS
+    alert names this chlorinator as its parent. No Flow is reported that way.
+    Salt level and chlorinator output are separate entities and are not inputs.
     """
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:alert-outline"
+    _status_attributes = frozenset({SNAME_ATTR, PARENT_ATTR})
 
     def __init__(
         self,
@@ -537,26 +541,51 @@ class ChlorinatorAlertBinarySensor(PoolEntity, BinarySensorEntity):
         return tuple(states)
 
     @property
+    def _status_messages(self) -> tuple[str, ...]:
+        """Return messages for STATUS alerts parented to this chlorinator."""
+        return tuple(
+            alert.message
+            for alert in alerts_for_parent(
+                self.coordinator.model, self._pool_object.objnam
+            )
+        )
+
+    def coordinator_update_dependencies(self) -> dict[str, set[str] | None]:
+        """Refresh when any controller alert message or parent changes."""
+        return {
+            obj.objnam: set(self._status_attributes)
+            for obj in self.coordinator.model.get_by_type(STATUS_OBJECT_TYPE)
+        }
+
+    @property
     def is_on(self) -> bool | None:
-        """Return whether any reported chlorinator flag is on."""
+        """Return whether this chlorinator has a flag or a parented alert."""
         states = self._flag_states
+        if self._status_messages or any(state for _label, state in states):
+            return True
         if not states:
             return None
-        return any(state for _label, state in states)
+        return False
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the names of the flags that are currently on."""
+        """Return active flag labels and parented STATUS alert messages."""
         attributes = super().extra_state_attributes
         if self.is_on is not None:
             attributes["active_alerts"] = [
                 label for label, state in self._flag_states if state
-            ]
+            ] + list(self._status_messages)
         return attributes
 
     def isUpdated(self, updates: dict[str, dict[str, Any]]) -> bool:
-        """Return whether any chlorinator problem flag changed."""
-        return self._check_attributes_updated(updates, *CHLORINATOR_PROBLEM_ATTRS)
+        """Return whether a flag or a parented alert changed."""
+        if self._check_attributes_updated(updates, *CHLORINATOR_PROBLEM_ATTRS):
+            return True
+        return any(
+            bool(self._status_attributes & changes.keys())
+            for objnam, changes in updates.items()
+            if objnam in self.coordinator_update_dependencies()
+        )
 
 
 class FirmwareUpdateBinarySensor(PoolEntity, BinarySensorEntity):

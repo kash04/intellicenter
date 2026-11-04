@@ -90,6 +90,11 @@ def active_alerts(model: PoolModel) -> list[ActiveAlert]:
     return alerts
 
 
+def alerts_for_parent(model: PoolModel, parent: str) -> list[ActiveAlert]:
+    """Return active alerts whose parent object is ``parent``."""
+    return [alert for alert in active_alerts(model) if alert.parent == parent]
+
+
 def parse_active_status_response(
     response: Any,
 ) -> list[tuple[str, dict[str, Any]]] | None:

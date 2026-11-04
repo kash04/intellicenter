@@ -320,6 +320,54 @@ def test_chlorinator_problem_sensors_follow_reported_flags(
     assert summary.isUpdated({PARENT: {SALTLO_ATTR: STATUS_ON}}) is True
     assert summary.isUpdated({PARENT: {"SALT": "3000"}}) is False
 
+
+def test_chlorinator_summary_includes_parented_status_alerts(
+    mock_coordinator: MagicMock,
+) -> None:
+    """No Flow is a STATUS row parented to the chlorinator, not a flag."""
+    mock_coordinator.model = _model()
+    chlorinator = _chlorinator(
+        **dict.fromkeys(
+            (COMERR_ATTR, SALTLO_ATTR, VERYLO_ATTR, CUTOFF_ATTR, CLEAN_ATTR),
+            STATUS_OFF,
+        )
+    )
+    no_flow = "IntelliChlor 1: No Flow"
+    mock_coordinator.model.add_object(
+        ALERT_OBJNAM,
+        {
+            "OBJTYP": STATUS_OBJECT_TYPE,
+            "SNAME": no_flow,
+            "PARENT": PARENT,
+        },
+    )
+    mock_coordinator.model.add_object(
+        "t0002",
+        {
+            "OBJTYP": STATUS_OBJECT_TYPE,
+            "SNAME": "Pump: Check",
+            "PARENT": "PMP01",
+        },
+    )
+
+    summary = next(
+        sensor
+        for sensor in build_binary_sensors(mock_coordinator, [chlorinator])
+        if isinstance(sensor, ChlorinatorAlertBinarySensor)
+    )
+    assert summary.is_on is True
+    assert summary.extra_state_attributes["active_alerts"] == [no_flow]
+    assert summary.coordinator_update_dependencies() == {
+        ALERT_OBJNAM: {"SNAME", "PARENT"},
+        "t0002": {"SNAME", "PARENT"},
+    }
+    assert summary.isUpdated({ALERT_OBJNAM: {"SNAME": no_flow}}) is True
+    assert summary.isUpdated({PARENT: {"SALT": "3000"}}) is False
+
+    mock_coordinator.model.remove_object(ALERT_OBJNAM)
+    assert summary.is_on is False
+    assert summary.extra_state_attributes["active_alerts"] == []
+
     salt_sensors = [
         sensor
         for sensor in build_sensors(mock_coordinator, [chlorinator])

@@ -230,8 +230,9 @@ Diagnostic, read-only entities on the IntelliCenter device:
   per flag the chlorinator actually reports as on/off: Communication Lost
   (`COMERR`), Low Salt (`SALTLO`), Very Low Salt (`VERYLO`), Cold Water Cutoff
   (`CUTOFF`) and Clean Cell (`CLEAN`), plus a **Chlorinator Alert** summary.
-  Salt level and chlorinator output are unchanged. No Flow is not a chlorinator
-  flag; when the panel raises it, it is one of the controller alerts above.
+  The summary is also on when a controller alert names that chlorinator as its
+  parent, and `active_alerts` includes those messages. No Flow is reported that
+  way. Salt level and chlorinator output are unchanged.
 
 Alerts already known to the integration update through the normal push stream.
 About every 30 seconds the integration also re-reads the panel's active-alert

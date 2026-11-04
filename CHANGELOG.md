@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Read-only IntelliChlor problem binary sensors for the chlorinator flags the
   panel reports (`COMERR`, `SALTLO`, `VERYLO`, `CUTOFF`, `CLEAN`), plus a
-  per-chlorinator summary. Salt level and chlorinator output entities are
-  unchanged. No Flow is not a chlorinator flag; it is a controller status alert.
+  per-chlorinator summary. The summary also includes controller alerts whose
+  parent is that chlorinator, so a No Flow status message is listed in
+  `active_alerts`. Salt level and chlorinator output entities are unchanged.
 - Diagnostic **Active alerts** sensor and **Any alert active** problem binary
   sensor. Messages come from `STATUS` objects. Known alerts follow the push
   stream; a read-only active-alert query discovers alerts that appear or clear
